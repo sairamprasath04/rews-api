@@ -19,8 +19,14 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 MODEL_DIR = BASE_DIR / "model_artifacts"
 
-model = joblib.load(MODEL_DIR / "rews_risk_model.pkl")
-features = joblib.load(MODEL_DIR / "rews_feature_order.pkl")
+try:
+    model = joblib.load(MODEL_DIR / "rews_risk_model.pkl")
+    features = joblib.load(MODEL_DIR / "rews_feature_order.pkl")
+    print("Model loaded successfully")
+except Exception as e:
+    print(f"WARNING: Model failed to load ({e}). Falling back to rule-based triage only.")
+    model = None
+    features = []
 
 
 class REWSInput(BaseModel):
@@ -58,6 +64,23 @@ class REWSInput(BaseModel):
     duration_days: int = 0
     smoking: int = 0
     alcohol: int = 0
+
+
+def rule_fallback(data: REWSInput) -> str:
+    score = 0
+    if data.age >= 75: score += 2
+    if data.lives_alone == 1: score += 1
+    if data.chest_pain == 1: score += 2
+    if data.shortness_of_breath == 1: score += 2
+    if data.confusion_drowsy == 1: score += 2
+    if data.fever == 1: score += 1
+    if data.tiredness == 1: score += 1
+    if data.o2_sat_missing == 0 and data.o2_sat < 95: score += 2
+    if data.heart_rate_missing == 0 and (data.heart_rate > 100 or data.heart_rate < 50): score += 1
+    if data.systolic_bp_missing == 0 and (data.systolic_bp > 160 or data.systolic_bp < 90): score += 1
+    if score >= 6: return "HIGH"
+    if score >= 3: return "MEDIUM"
+    return "LOW"
 
 
 def map_to_ats(risk_tier: str) -> dict:
@@ -159,6 +182,20 @@ def predict(data: REWSInput):
                     "LOW": 0.0
                 },
                 "reasons": override_reasons
+            }
+
+        if model is None:
+            # ML model unavailable — use heuristic fallback
+            pred = rule_fallback(data)
+            ats_info = map_to_ats(pred)
+            reasons = generate_reasons(data, pred)
+            return {
+                "risk_tier": pred,
+                "source": "rule_based_fallback",
+                "ats_category": ats_info["ats_category"],
+                "urgency": ats_info["urgency"],
+                "probabilities": {"HIGH": 0.0, "MEDIUM": 0.0, "LOW": 0.0},
+                "reasons": reasons
             }
 
         data_dict = data.dict()
