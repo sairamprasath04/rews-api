@@ -198,7 +198,7 @@ def predict(data: REWSInput):
                 "reasons": reasons
             }
 
-        data_dict = data.dict()
+        data_dict = data.model_dump()
 
         data_dict["smoking_status"] = data_dict.get("smoking_status", data_dict.get("smoking", 0))
 
